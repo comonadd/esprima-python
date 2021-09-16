@@ -64,7 +64,11 @@ class Config(Object):
 
 
 class Context(object):
-    def __init__(self, isModule=False, allowAwait=False, allowIn=True, allowStrictDirective=True, allowYield=True, firstCoverInitializedNameError=None, isAssignmentTarget=False, isBindingElement=False, inFunctionBody=False, inIteration=False, inSwitch=False, labelSet=None, strict=False):
+    def __init__(self, isModule=False, allowAwait=False, allowIn=True,
+                 allowStrictDirective=True, allowYield=True,
+                 firstCoverInitializedNameError=None, isAssignmentTarget=False, isBindingElement=False,
+                 inFunctionBody=False, inIteration=False, inSwitch=False, labelSet=None, strict=False,
+                 typescriptEnabled=False):
         self.isModule = isModule
         self.allowAwait = allowAwait
         self.allowIn = allowIn
@@ -76,6 +80,7 @@ class Context(object):
         self.inFunctionBody = inFunctionBody
         self.inIteration = inIteration
         self.inSwitch = inSwitch
+        self.typescriptEnabled = typescriptEnabled
         self.labelSet = {} if labelSet is None else labelSet
         self.strict = strict
 
@@ -97,14 +102,14 @@ class TokenEntry(Object):
 
 
 class Parser(object):
-    def __init__(self, code, options={}, delegate=None):
+    def __init__(self, code, options={}, delegate=None, typescriptEnabled=False):
         self.config = Config(**options)
 
         self.delegate = delegate
 
         self.errorHandler = ErrorHandler()
         self.errorHandler.tolerant = self.config.tolerant
-        self.scanner = Scanner(code, self.errorHandler)
+        self.scanner = Scanner(code, self.errorHandler, typescriptEnabled)
         self.scanner.trackComment = self.config.comment
 
         self.operatorPrecedence = {
@@ -156,7 +161,8 @@ class Parser(object):
             inIteration=False,
             inSwitch=False,
             labelSet={},
-            strict=False
+            strict=False,
+            typescriptEnabled=typescriptEnabled,
         )
         self.tokens = []
 
@@ -548,6 +554,18 @@ class Parser(object):
                 self.tolerateUnexpectedToken(self.lookahead)
             expr = self.parseFunctionExpression() if self.matchAsyncFunction() else self.finalize(node, Node.Identifier(self.nextToken().value))
 
+            # Generics in a function call
+            # NOTE: Should probably attach this generic parameter info
+            # to the identifier and only then check if it's allowed or not
+            if self.context.typescriptEnabled:
+                if self.lookahead.type is Token.Punctuator and self.lookahead.value == "<":
+                    # Just skip for now
+                    # TODO: Capture generics in the AST
+                    self.nextToken()
+                    while not (self.lookahead.type is Token.Punctuator and self.lookahead.value == ">"):
+                        self.nextToken()
+                    self.nextToken()
+
         elif typ in (
             Token.NumericLiteral,
             Token.StringLiteral,
@@ -613,6 +631,15 @@ class Parser(object):
                     expr = self.parseClassExpression()
                 elif self.matchImportCall():
                     expr = self.parseImportCall()
+                elif self.context.typescriptEnabled:
+                    if self.matchKeyword('enum'):
+                        expr = self.parseTypescriptEnum()
+                    elif self.matchKeyword('interface'):
+                        expr = self.parseTypescriptInterfaceDecl()
+                    elif self.matchKeyword('type'):
+                        expr = self.parseTypescriptTypeDecl()
+                    else:
+                        expr = self.throwUnexpectedToken(self.nextToken())
                 else:
                     expr = self.throwUnexpectedToken(self.nextToken())
 
@@ -1053,6 +1080,8 @@ class Parser(object):
                     expr = self.parseSpreadElement()
                 else:
                     expr = self.isolateCoverGrammar(self.parseAsyncArgument)
+                print("GOT EXPR")
+                print(expr)
                 args.append(expr)
                 if self.match(')'):
                     break
@@ -1421,6 +1450,62 @@ class Parser(object):
             message=options.message
         )
 
+    def parseSingleType(self):
+        ts_type = {"is_array": False}
+        if self.lookahead.type is Token.Identifier:
+            type_name = self.parseIdentifierName()
+            # Parse generic parameters
+            if self.lookahead.type is Token.Punctuator and self.lookahead.value == "<":
+                # Just skip for now
+                # TODO: Capture generics in the AST
+                self.nextToken()
+                while not (self.lookahead.type is Token.Punctuator and self.lookahead.value == ">"):
+                    self.nextToken()
+                self.nextToken()
+            ts_type["type"] = type_name
+        elif self.lookahead.type is Token.NullLiteral:
+            ts_type["type"] = self.lookahead
+            self.nextToken()
+        elif self.lookahead.type is Token.StringLiteral:
+            ts_type["type"] = self.lookahead
+            self.nextToken()
+        elif self.lookahead.type is Token.NumericLiteral:
+            ts_type["type"] = self.lookahead
+            self.nextToken()
+        else:
+            self.throwUnexpectedToken(self.lookahead)
+
+        # Parse array type specifier (T[])
+        if self.lookahead.type is Token.Punctuator and self.lookahead.value == '[':
+            self.nextToken()
+            if self.lookahead.type is Token.Punctuator and self.lookahead.value == ']':
+                self.nextToken()
+                is_array = True
+            else:
+                self.unexpectedTokenError()
+
+        return ts_type
+
+    def parseTypescriptTypeExpr(self):
+        ts_type = []
+        while True:
+            ts_type.append(self.parseSingleType())
+            if self.lookahead.type is Token.Punctuator and self.lookahead.value == '|':
+                ts_type.append('|')
+                self.nextToken()
+            elif self.lookahead.type is Token.Punctuator and self.lookahead.value == '&':
+                ts_type.append('&')
+                self.nextToken()
+            else:
+                break
+        return ts_type
+
+    def parseTypeDeclaration(self):
+        nt = self.lookahead
+        if nt.type is Token.Punctuator and nt.value == ":":
+            self.nextToken()
+            return self.parseTypescriptTypeExpr()
+
     def parseAssignmentExpression(self):
         if not self.context.allowYield and self.matchKeyword('yield'):
             expr = self.parseYieldExpression()
@@ -1482,6 +1567,11 @@ class Parser(object):
                     self.context.allowYield = previousAllowYield
                     self.context.allowAwait = previousAwait
             else:
+                if self.context.typescriptEnabled:
+                    type_decl = self.parseTypeDeclaration()
+                    print("got typings: ", expr, type_decl)
+                    # TODO: Add this to the resulting AST
+
                 if self.matchAssign():
                     if not self.context.isAssignmentTarget:
                         self.tolerateError(Messages.InvalidLHSInAssignment)
@@ -1583,7 +1673,12 @@ class Parser(object):
             if self.scanner.isRestrictedWord(id.name):
                 self.tolerateError(Messages.StrictVarName)
 
+        # check if there's a typescript type attached to the identifier
+        if self.context.typescriptEnabled:
+            type_decl = self.parseTypeDeclaration()
+
         init = None
+        # parse initializer
         if kind == 'const':
             if not self.matchKeyword('in') and not self.matchContextualKeyword('of'):
                 if self.match('='):
@@ -1734,6 +1829,7 @@ class Parser(object):
     def parsePatternWithDefault(self, params, kind=None):
         startToken = self.lookahead
 
+        # TODO: Maybe need to something here... like parse : after the startToken???
         pattern = self.parsePattern(params, kind)
         if self.match('='):
             self.nextToken()
@@ -2407,6 +2503,14 @@ class Parser(object):
     def parseFormalParameter(self, options):
         params = []
         param = self.parseRestElement(params) if self.match('...') else self.parsePatternWithDefault(params)
+
+        # TODO: Handle typed arguments
+        if self.context.typescriptEnabled:
+            type_decl = self.parseTypeDeclaration()
+            if type_decl is not None:
+                print("got typings: ", param, type_decl)
+                # TODO: Add this to the resulting AST
+
         for p in params:
             self.validateParam(options, p, p.value)
         options.simple = options.simple and isinstance(param, Node.Identifier)
@@ -2486,6 +2590,17 @@ class Parser(object):
         self.context.allowAwait = isAsync
         self.context.allowYield = not isGenerator
 
+        # Check for generics
+        if self.context.typescriptEnabled:
+            print("Hello")
+            if self.lookahead.type is Token.Punctuator and self.lookahead.value == "<":
+                self.nextToken()
+                while (not (self.lookahead.type is Token.Punctuator and self.lookahead.value == ">")):
+                    self.nextToken()
+                self.nextToken()
+                print("here")
+
+
         formalParameters = self.parseFormalParameters(firstRestricted)
         params = formalParameters.params
         stricted = formalParameters.stricted
@@ -2496,6 +2611,12 @@ class Parser(object):
         previousStrict = self.context.strict
         previousAllowStrictDirective = self.context.allowStrictDirective
         self.context.allowStrictDirective = formalParameters.simple
+
+        # Check for return type
+        if self.context.typescriptEnabled:
+            return_type = self.parseTypeDeclaration()
+            print(f"Function {id} has return type of {return_type}")
+
         body = self.parseFunctionSourceElements()
         if self.context.strict and firstRestricted:
             self.throwUnexpectedToken(firstRestricted, message)
@@ -2850,9 +2971,10 @@ class Parser(object):
     # https://tc39.github.io/ecma262/#sec-scripts
     # https://tc39.github.io/ecma262/#sec-modules
 
-    def parseModule(self):
+    def parseModule(self, typescriptEnabled=False):
         self.context.strict = True
         self.context.isModule = True
+        self.context.typescriptEnabled = typescriptEnabled
         self.scanner.isModule = True
         node = self.createNode()
         body = self.parseDirectivePrologues()
@@ -2991,6 +3113,37 @@ class Parser(object):
         local = self.parseIdentifierName()
         return self.finalize(node, Node.ExportDefaultSpecifier(local))
 
+    def parseTypescriptInterfaceDecl(self):
+        # TODO: Return Node like "TypescriptInterfaceDeclaration"
+        self.expectKeyword('interface')
+        int_name = self.parseIdentifierName()
+
+        node = self.createNode()
+        self.expect('{')
+        properties = []
+        hasProto = Value(False)
+        while not self.match('}'):
+            properties.append(self.parseSpreadElement() if self.match('...') else self.parseObjectProperty(hasProto))
+            if not self.match('}'):
+                self.expect(';')
+        self.expect('}')
+
+        return int_name
+
+    def parseTypescriptTypeDecl(self):
+        # TODO: Return Node like "TypescriptTypeDeclaration"
+        self.expectKeyword('type')
+        # type_name = self.parseIdentifierName()
+        type_value = self.parseAssignmentExpression()
+        return type_value
+
+    def parseTypescriptEnum(self):
+        # TODO: Return Node like "TypescriptEnumDeclaration"
+        self.expectKeyword('enum')
+        enum_name = self.parseIdentifierName()
+        enum_obj = self.parseObjectInitializer()
+        return enum_name
+
     def parseExportDeclaration(self):
         if self.context.inFunctionBody:
             self.throwError(Messages.IllegalExportDeclaration)
@@ -3056,6 +3209,15 @@ class Parser(object):
                 'function',
             ):
                 declaration = self.parseStatementListItem()
+            elif self.context.typescriptEnabled:
+                if value == 'enum':
+                    declaration = self.parseTypescriptEnum()
+                elif value == 'type':
+                    declaration = self.parseTypescriptTypeDecl()
+                elif value == 'interface':
+                    declaration = self.parseTypescriptInterfaceDecl()
+                else:
+                    self.throwUnexpectedToken(self.lookahead)
             else:
                 self.throwUnexpectedToken(self.lookahead)
             exportDeclaration = self.finalize(node, Node.ExportNamedDeclaration(declaration, [], None))

@@ -70,13 +70,16 @@ def parse(code, options=None, delegate=None, **kwargs):
         parserDelegate = proxyDelegate
 
     isModule = options.get('sourceType', 'script') == 'module'
+    print(f"IS_MODULE: {isModule}", options)
+
+    typescriptEnabled = options.get('typescript', False)
 
     if options.get('jsx', False):
-        parser = JSXParser(code, options=options, delegate=parserDelegate)
+        parser = JSXParser(code, options=options, delegate=parserDelegate, typescriptEnabled=typescriptEnabled)
     else:
-        parser = Parser(code, options=options, delegate=parserDelegate)
+        parser = Parser(code, options=options, delegate=parserDelegate, typescriptEnabled=typescriptEnabled)
 
-    ast = parser.parseModule() if isModule else parser.parseScript()
+    ast = parser.parseModule(typescriptEnabled=typescriptEnabled) if isModule else parser.parseScript()
 
     if collectComment and commentHandler:
         ast.comments = commentHandler.comments

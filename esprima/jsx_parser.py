@@ -77,8 +77,8 @@ def getQualifiedElementName(elementName):
 
 
 class JSXParser(Parser):
-    def __init__(self, code, options, delegate):
-        super(JSXParser, self).__init__(code, options, delegate)
+    def __init__(self, code, options, delegate, typescriptEnabled=False):
+        super(JSXParser, self).__init__(code, options, delegate, typescriptEnabled)
 
     def parsePrimaryExpression(self):
         return self.parseJSXRoot() if self.match('<') else super(JSXParser, self).parsePrimaryExpression()

@@ -99,7 +99,7 @@ class Octal(object):
 
 
 class Scanner(object):
-    def __init__(self, code, handler):
+    def __init__(self, code, handler, typescriptEnabled=False):
         self.source = unicode(code) + '\x00'
         self.errorHandler = handler
         self.trackComment = False
@@ -110,6 +110,34 @@ class Scanner(object):
         self.lineNumber = 1 if self.length > 0 else 0
         self.lineStart = 0
         self.curlyStack = []
+
+        self.keywords = {
+            'if', 'in', 'do',
+
+            'var', 'for', 'new',
+            'try', 'let',
+
+            'this', 'else', 'case',
+            'void', 'with', 'enum',
+
+            'while', 'break', 'catch',
+            'throw', 'const', 'yield',
+            'class', 'super',
+
+            'return', 'typeof', 'delete',
+            'switch', 'export', 'import',
+
+            'default', 'finally', 'extends',
+
+            'function', 'continue', 'debugger',
+
+            'instanceof',
+        }
+
+        if typescriptEnabled:
+            self.keywords.add('interface')
+            self.keywords.add('type')
+            self.keywords.add('enum')
 
     def saveState(self):
         return ScannerState(
@@ -347,29 +375,7 @@ class Scanner(object):
     # https://tc39.github.io/ecma262/#sec-keywords
 
     def isKeyword(self, id):
-        return id in self.isKeyword.set
-    isKeyword.set = set((
-        'if', 'in', 'do',
-
-        'var', 'for', 'new',
-        'try', 'let',
-
-        'this', 'else', 'case',
-        'void', 'with', 'enum',
-
-        'while', 'break', 'catch',
-        'throw', 'const', 'yield',
-        'class', 'super',
-
-        'return', 'typeof', 'delete',
-        'switch', 'export', 'import',
-
-        'default', 'finally', 'extends',
-
-        'function', 'continue', 'debugger',
-
-        'instanceof',
-    ))
+        return id in self.keywords
 
     def codePointAt(self, i):
         return uord(self.source[i:i + 2])
