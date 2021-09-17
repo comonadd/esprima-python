@@ -545,6 +545,40 @@ class Parser(object):
 
     # https://tc39.github.io/ecma262/#sec-primary-expression
 
+    def tryParsingGenerics(self):
+        if self.lookahead.type is Token.Punctuator and self.lookahead.value == "<":
+            # Just skip for now
+            # TODO: Capture generics in the AST
+            prevState = self.scanner.saveState()
+            savedLookAhead = self.lookahead
+            # self.scanner.scanComments()
+            # next = self.scanner.lex()
+            self.nextToken()
+            failed = False
+            while True:
+                if self.lookahead.type is Token.EOF:
+                    failed = True
+                    break
+                t = self.parseTypescriptTypeExpr()
+                if self.lookahead.type is Token.Punctuator and self.lookahead.type == ">":
+                    break
+                elif self.lookahead.type == Token.Punctuator and self.lookahead.type == ",":
+                    self.nextToken()
+                    # self.scanner.scanComments()
+                    # next = self.scanner.lex()
+                    continue
+                else:
+                    failed = True
+                    break
+            if failed:
+                self.scanner.restoreState(prevState)
+                self.lookahead = savedLookAhead
+                return None
+            else:
+                self.nextToken()
+            return {"generics": True}
+        return None
+
     def parsePrimaryExpression(self):
         node = self.createNode()
 
@@ -558,13 +592,9 @@ class Parser(object):
             # NOTE: Should probably attach this generic parameter info
             # to the identifier and only then check if it's allowed or not
             if self.context.typescriptEnabled:
-                if self.lookahead.type is Token.Punctuator and self.lookahead.value == "<":
-                    # Just skip for now
-                    # TODO: Capture generics in the AST
-                    self.nextToken()
-                    while not (self.lookahead.type is Token.Punctuator and self.lookahead.value == ">"):
-                        self.nextToken()
-                    self.nextToken()
+                generics = self.tryParsingGenerics()
+                if generics is not None:
+                    pass
 
         elif typ in (
             Token.NumericLiteral,
@@ -1455,13 +1485,7 @@ class Parser(object):
         if self.lookahead.type is Token.Identifier:
             type_name = self.parseIdentifierName()
             # Parse generic parameters
-            if self.lookahead.type is Token.Punctuator and self.lookahead.value == "<":
-                # Just skip for now
-                # TODO: Capture generics in the AST
-                self.nextToken()
-                while not (self.lookahead.type is Token.Punctuator and self.lookahead.value == ">"):
-                    self.nextToken()
-                self.nextToken()
+            generics = self.tryParsingGenerics()
             ts_type["type"] = type_name
         elif self.lookahead.type is Token.NullLiteral:
             ts_type["type"] = self.lookahead
@@ -2592,14 +2616,7 @@ class Parser(object):
 
         # Check for generics
         if self.context.typescriptEnabled:
-            print("Hello")
-            if self.lookahead.type is Token.Punctuator and self.lookahead.value == "<":
-                self.nextToken()
-                while (not (self.lookahead.type is Token.Punctuator and self.lookahead.value == ">")):
-                    self.nextToken()
-                self.nextToken()
-                print("here")
-
+            generics = self.tryParsingGenerics()
 
         formalParameters = self.parseFormalParameters(firstRestricted)
         params = formalParameters.params
